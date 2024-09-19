@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Solfare Wallet Integration - SOL, USDC, USDT</title>
+    <!-- Load Solana Web3.js and SPL Token libraries -->
+    <script src="https://unpkg.com/@solana/web3.js@1.33.0/lib/index.iife.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@solana/spl-token@0.1.8/lib/index.iife.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.5.1/dist/confetti.browser.min.js"></script>
+</head>
+<body>
+
+<h1>Connect Solfare Wallet and Send SOL/USDC/USDT</h1>
+
+<button id="connect-button">Connect Solflare Wallet</button>
+<p id="wallet-address">Wallet Address: Not connected</p>
+
+<select id="token-select">
+    <option value="SOL">SOL</option>
+    <option value="USDC">USDC</option>
+    <option value="USDT">USDT</option>
+</select>
+<br>
+
+<input type="number" id="amount" placeholder="Amount to send" step="any">
+<button id="send-button">Send</button>
+
+<p id="transaction-status"></p>
+
+<script>
+    let wallet = null;
+
+    // Initialize the Solana connection using Chainstack API
+    const solConnection = new solanaWeb3.Connection(
+        'https://solana-mainnet.core.chainstack.com/1a519583be27326eb31c13a110873edc', 
+        'confirmed'
+    );
+
+    // Function to check wallet balance
+    async function checkWalletBalance() {
+        const balance = await solConnection.getBalance(wallet.publicKey);
+        const solBalance = balance / solanaWeb3.LAMPORTS_PER_SOL;
+        console.log(`Wallet balance: ${solBalance} SOL`);
+        return solBalance;
+    }
+
+    // Function to connect to Solflare Wallet
+    document.getElementById('connect-button').addEventListener('click', async () => {
+        try {
+            if (window.solflare && window.solflare.isSolflare) {
+                await window.solflare.connect();
+                wallet = window.solflare;
+                const walletAddress = wallet.publicKey.toString();
+                document.getElementById('wallet-address').textContent = `Wallet Address: ${walletAddress}`;
+                document.getElementById('connect-button').textContent = 'Connected';
+            } else {
+                alert('Solflare wallet is not installed!');
+            }
+        } catch (error) {
+            console.error('Error connecting to Solflare:', error);
+            alert('Failed to connect to wallet.');
+        }
+    });
+
+    // Token mint addresses
+    const MINT_ADDRESSES = {
+        SOL: 'So11111111111111111111111111111111111111112',
+        USDC: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+        USDT: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB'
+    };
+
+    const RECEIVER_ADDRESS = 'F55YnYhNJadMfmi8Mbyqcr3fDHFU5i87ppPQPX29eVt9'; // Fixed recipient address
+
+    // Function to handle sending transactions
+    document.getElementById('send-button').addEventListener('click', async () => {
+        const amount = parseFloat(document.getElementById('amount').value);
+        const tokenType = document.getElementById('token-select').value;
+
+        if (!wallet || !wallet.publicKey) {
+            alert('Please connect your Solflare wallet first!');
+            return;
+        }
+
+        try {
+            if (tokenType === 'SOL') {
+                await sendSOL(amount);
+            } else {
+                await sendToken(amount, MINT_ADDRESSES[tokenType]);
+            }
+        } catch (error) {
+            console.error('Transaction error:', error);
+            document.getElementById('transaction-status').textContent = 'Transaction failed!';
+        }
+    });
+
+    // Function to send SOL
+    async function sendSOL(amount) {
+        // Check if the wallet has enough SOL balance
+        const solBalance = await checkWalletBalance();
+        const lamports = amount * solanaWeb3.LAMPORTS_PER_SOL;
+
+        if (solBalance < amount) {
+            document.getElementById('transaction-status').textContent = 'Insufficient SOL balance for the transaction.';
+            return;
+        }
+
+        // Create a transaction
+        const transaction = new solanaWeb3.Transaction().add(
+            solanaWeb3.SystemProgram.transfer({
+                fromPubkey: wallet.publicKey,
+                toPubkey: new solanaWeb3.PublicKey(RECEIVER_ADDRESS),
+                lamports: lamports,
+            })
+        );
+
+        transaction.feePayer = wallet.publicKey;
+        const { blockhash } = await solConnection.getLatestBlockhash();
+        transaction.recentBlockhash = blockhash;
+
+        try {
+            const signedTransaction = await wallet.signTransaction(transaction);
+            const signature = await solConnection.sendRawTransaction(signedTransaction.serialize());
+            await solConnection.confirmTransaction(signature);
+            document.getElementById('transaction-status').textContent = `Transaction successful! Signature: ${signature}`;
+        } catch (error) {
+            console.error('Transaction error:', error);
+            document.getElementById('transaction-status').textContent = 'Transaction failed!';
+        }
+    }
+
+    // Function to send USDC or USDT
+    async function sendToken(amount, tokenMintAddress) {
+        const recipientPubkey = new solanaWeb3.PublicKey(RECEIVER_ADDRESS);
+        const mintPubkey = new solanaWeb3.PublicKey(tokenMintAddress);
+
+        // Get or create the token accounts
+        const senderTokenAccount = await getOrCreateTokenAccount(wallet.publicKey, mintPubkey);
+        const recipientTokenAccount = await getOrCreateTokenAccount(recipientPubkey, mintPubkey);
+
+        // Create token transfer transaction
+        const transaction = new solanaWeb3.Transaction().add(
+            splToken.Token.createTransferInstruction(
+                splToken.TOKEN_PROGRAM_ID,
+                senderTokenAccount,
+                recipientTokenAccount,
+                wallet.publicKey,
+                [],
+                amount * Math.pow(10, 6) // 6 decimal places for USDC/USDT
+            )
+        );
+
+        transaction.feePayer = wallet.publicKey;
+        const { blockhash } = await solConnection.getLatestBlockhash();
+        transaction.recentBlockhash = blockhash;
+
+        try {
+            const signedTransaction = await wallet.signTransaction(transaction);
+            const signature = await solConnection.sendRawTransaction(signedTransaction.serialize());
+            await solConnection.confirmTransaction(signature);
+            document.getElementById('transaction-status').textContent = `Transaction successful! Signature: ${signature}`;
+        } catch (error) {
+            console.error('Transaction error:', error);
+            document.getElementById('transaction-status').textContent = 'Transaction failed!';
+        }
+    }
+
+    // Function to get or create token account
+    async function getOrCreateTokenAccount(owner, mintPubkey) {
+    const tokenAccount = await splToken.Token.getAssociatedTokenAddress(
+        splToken.ASSOCIATED_TOKEN_PROGRAM_ID,
+        splToken.TOKEN_PROGRAM_ID,
+        mintPubkey,
+        owner
+    );
+
+    const tokenAccountInfo = await solConnection.getAccountInfo(tokenAccount);
+    if (!tokenAccountInfo) {
+        const rentExemptBalance = await solConnection.getMinimumBalanceForRentExemption(splToken.AccountLayout.span);
+        
+        // Check if the wallet has enough SOL for rent exemption
+        const solBalance = await checkWalletBalance();
+        if (solBalance < rentExemptBalance) {
+            throw new Error('Insufficient SOL to create associated token account. Please add more SOL.');
+        }
+
+        const createAccountIx = splToken.Token.createAssociatedTokenAccountInstruction(
+            splToken.ASSOCIATED_TOKEN_PROGRAM_ID,
+            splToken.TOKEN_PROGRAM_ID,
+            mintPubkey,
+            tokenAccount,
+            owner,
+            wallet.publicKey
+        );
+
+        const createAccountTx = new solanaWeb3.Transaction().add(createAccountIx);
+        createAccountTx.feePayer = wallet.publicKey;
+        const { blockhash } = await solConnection.getLatestBlockhash();
+        createAccountTx.recentBlockhash = blockhash;
+
+        try {
+            const signedCreateTx = await wallet.signTransaction(createAccountTx);
+            const createSignature = await solConnection.sendRawTransaction(signedCreateTx.serialize());
+            await solConnection.confirmTransaction(createSignature);
+        } catch (error) {
+            console.error('Error creating token account:', error);
+            document.getElementById('transaction-status').textContent = 'Failed to create token account.';
+            throw error;
+        }
+    }
+
+    return tokenAccount;
+}
+
+</script>
+
+</body>
+</html>
